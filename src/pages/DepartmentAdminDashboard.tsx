@@ -6,7 +6,11 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Users, BookOpen, GraduationCap, UserPlus, Edit, Trash2, ExternalLink } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import { Users, BookOpen, GraduationCap, UserPlus, Edit, Trash2, ExternalLink, ClipboardList, Check, X } from 'lucide-react';
 import { AddUserDialog } from '@/components/AddUserDialog';
 import { EditUserDialog } from '@/components/EditUserDialog';
 import { deactivateUser } from '@/lib/userManager';
@@ -19,6 +23,12 @@ import {
 } from '@/lib/userManager';
 import { getCoursesByDepartment, Course } from '@/lib/courseManager';
 import { getDepartmentById, Department } from '@/lib/departmentManager';
+import { 
+  getSignupRequests, 
+  approveSignupRequest, 
+  rejectSignupRequest,
+  SignupRequest 
+} from '@/lib/signupRequestManager';
 
 export default function DepartmentAdminDashboard() {
   const { user } = useAuth();
@@ -30,12 +40,16 @@ export default function DepartmentAdminDashboard() {
   const [students, setStudents] = useState<UserProfile[]>([]);
   const [instructors, setInstructors] = useState<UserProfile[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
+  const [signupRequests, setSignupRequests] = useState<SignupRequest[]>([]);
   const [loading, setLoading] = useState(true);
   
   const [showAddStudentDialog, setShowAddStudentDialog] = useState(false);
   const [showAddInstructorDialog, setShowAddInstructorDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
+  const [showApproveDialog, setShowApproveDialog] = useState(false);
+  const [selectedRequest, setSelectedRequest] = useState<SignupRequest | null>(null);
+  const [temporaryPassword, setTemporaryPassword] = useState('');
 
   useEffect(() => {
     if (!user) {
@@ -78,16 +92,18 @@ export default function DepartmentAdminDashboard() {
         return;
       }
 
-      const [deptData, allUsers, coursesData] = await Promise.all([
+      const [deptData, allUsers, coursesData, requestsData] = await Promise.all([
         getDepartmentById(deptId),
         getUsersByDepartment(deptId),
-        getCoursesByDepartment(deptId)
+        getCoursesByDepartment(deptId),
+        getSignupRequests(deptId)
       ]);
 
       setDepartment(deptData);
       setStudents(allUsers.filter(u => u.role === 'student'));
       setInstructors(allUsers.filter(u => u.role === 'instructor'));
       setCourses(coursesData);
+      setSignupRequests(requestsData);
     } catch (error) {
       console.error('Failed to load data:', error);
       toast({
@@ -140,6 +156,57 @@ export default function DepartmentAdminDashboard() {
     }
   };
 
+  const handleApproveRequest = (request: SignupRequest) => {
+    setSelectedRequest(request);
+    setTemporaryPassword(Math.random().toString(36).slice(-8));
+    setShowApproveDialog(true);
+  };
+
+  const confirmApprove = async () => {
+    if (!selectedRequest || !user) return;
+
+    const { success, error } = await approveSignupRequest(
+      selectedRequest.id,
+      user.id,
+      temporaryPassword
+    );
+
+    if (success) {
+      toast({
+        title: 'Request Approved',
+        description: `Signup request approved. Note: A super admin must create the account in Supabase Auth with email: ${selectedRequest.email} and password: ${temporaryPassword}`
+      });
+      setShowApproveDialog(false);
+      setSelectedRequest(null);
+      setTemporaryPassword('');
+      loadData();
+    } else {
+      toast({
+        title: 'Error',
+        description: error || 'Failed to approve request',
+        variant: 'destructive'
+      });
+    }
+  };
+
+  const handleRejectRequest = async (requestId: string) => {
+    if (!confirm('Are you sure you want to reject this signup request?')) return;
+    if (!user) return;
+
+    const { success, error } = await rejectSignupRequest(requestId, user.id);
+
+    if (success) {
+      toast({ title: 'Request Rejected' });
+      loadData();
+    } else {
+      toast({
+        title: 'Error',
+        description: error || 'Failed to reject request',
+        variant: 'destructive'
+      });
+    }
+  };
+
   if (!user || user.role !== 'department_admin') return null;
 
   return (
@@ -167,6 +234,42 @@ export default function DepartmentAdminDashboard() {
         onSuccess={loadData}
       />
 
+      <Dialog open={showApproveDialog} onOpenChange={setShowApproveDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Approve Signup Request</DialogTitle>
+            <DialogDescription>
+              Generate a temporary password for {selectedRequest?.name}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input id="email" value={selectedRequest?.email || ''} disabled />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="password">Temporary Password</Label>
+              <Input 
+                id="password" 
+                value={temporaryPassword} 
+                onChange={(e) => setTemporaryPassword(e.target.value)}
+              />
+            </div>
+            <div className="bg-muted p-3 rounded text-sm">
+              <strong>Note:</strong> After approval, a Super Admin must manually create this user account in Supabase Auth with the email and password above.
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowApproveDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={confirmApprove}>
+              Approve Request
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     <div className="container mx-auto px-4 py-8">
       <div className="mb-8">
         <h1 className="text-4xl font-bold mb-2">
@@ -178,7 +281,7 @@ export default function DepartmentAdminDashboard() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium">Students</CardTitle>
@@ -206,14 +309,109 @@ export default function DepartmentAdminDashboard() {
             <div className="text-2xl font-bold">{courses.length}</div>
           </CardContent>
         </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium">Pending Requests</CardTitle>
+            <ClipboardList className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {signupRequests.filter(r => r.status === 'pending').length}
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
-      <Tabs defaultValue="students" className="space-y-6">
+      <Tabs defaultValue="requests" className="space-y-6">
         <TabsList>
+          <TabsTrigger value="requests">
+            Signup Requests
+            {signupRequests.filter(r => r.status === 'pending').length > 0 && (
+              <Badge variant="destructive" className="ml-2">
+                {signupRequests.filter(r => r.status === 'pending').length}
+              </Badge>
+            )}
+          </TabsTrigger>
           <TabsTrigger value="students">Students</TabsTrigger>
           <TabsTrigger value="instructors">Instructors</TabsTrigger>
           <TabsTrigger value="courses">Courses</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="requests">
+          <Card>
+            <CardHeader>
+              <CardTitle>Signup Requests</CardTitle>
+              <CardDescription>Review and manage student signup requests</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="text-center py-8">Loading requests...</div>
+              ) : signupRequests.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  No signup requests yet
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Student ID</TableHead>
+                      <TableHead>Message</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {signupRequests.map(request => (
+                      <TableRow key={request.id}>
+                        <TableCell className="font-medium">{request.name}</TableCell>
+                        <TableCell>{request.email}</TableCell>
+                        <TableCell>{request.student_id || 'N/A'}</TableCell>
+                        <TableCell className="max-w-xs truncate">{request.message || '-'}</TableCell>
+                        <TableCell>{new Date(request.created_at).toLocaleDateString()}</TableCell>
+                        <TableCell>
+                          <Badge 
+                            variant={
+                              request.status === 'approved' ? 'default' :
+                              request.status === 'rejected' ? 'destructive' :
+                              'secondary'
+                            }
+                          >
+                            {request.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {request.status === 'pending' && (
+                            <div className="flex gap-2">
+                              <Button
+                                size="sm"
+                                variant="default"
+                                onClick={() => handleApproveRequest(request)}
+                              >
+                                <Check className="h-4 w-4 mr-1" />
+                                Approve
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => handleRejectRequest(request.id)}
+                              >
+                                <X className="h-4 w-4 mr-1" />
+                                Reject
+                              </Button>
+                            </div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         <TabsContent value="students">
           <Card>
